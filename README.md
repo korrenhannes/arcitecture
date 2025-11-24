@@ -1,51 +1,30 @@
-How to Run and Check the Project
+1.	Build both executables and verify paths
 
-Project Components:
+msbuild .\sim.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /p:OutDir=.\x64\Release\ /p:IntDir=.\x64\Release\sim_int; msbuild .\ca2024asm\ca2024asm.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64; Get-Item .\x64\Release\sim.exe; Get-Item .\ca2024asm\x64\Release\ca2024asm.exe
 
-1.	Assembler (ca2024asm/ca2024asm/asm.c) - Converts assembly (.asm) files to machine code
-2.	Simulator (sim.c) - 4-core pipelined processor simulator with MESI cache coherence
-3.	Test Programs - counter, mulserial, mulparallel
----
+2.	COUNTER test
 
-Step 1: Compile the Programs
+(assemble only imem, keep memin.txt) 0..3 | % { .\ca2024asm\x64\Release\ca2024asm.exe "counter\imem$.asm" "counter\imem$.txt" "counter\dummy.txt" }; Copy-Item .\x64\Release\sim.exe .\counter\sim.exe -Force; Push-Location counter; .\sim.exe; Pop-Location; if ((Get-Content .\counter\memout.txt)[0] -ne '00000200') { Write-Error 'COUNTER FAILED' } else { 'COUNTER OK' }
 
-Compile the Assembler:
 
-cd ca2024asm/ca2024asm
+3.	SERIAL matrix test
 
-gcc -o asm.exe asm.c project.c
+0..3 | % { .\ca2024asm\x64\Release\ca2024asm.exe "mulserial\imem$.asm" "mulserial\imem$.txt" "mulserial\dummy.txt" }; Copy-Item .\x64\Release\sim.exe .\mulserial\sim.exe -Force; Push-Location mulserial; .\sim.exe; Pop-Location; (Get-Content .\mulserial\memout.txt | Select-Object -Last 20)
 
-Compile the Simulator:
 
-gcc -o sim.exe sim.c
+4.	PARALLEL matrix test
 
-Step 2: Assemble Test Programs
-# Example for counter program
+0..3 | % { .\ca2024asm\x64\Release\ca2024asm.exe "mulparallel\imem$.asm" "mulparallel\imem$.txt" "mulparallel\dummy.txt" }; Copy-Item .\x64\Release\sim.exe .\mulparallel\sim.exe -Force; Push-Location mulparallel; .\sim.exe; Pop-Location; (Get-Content .\mulparallel\memout.txt | Select-Object -Last 20)
 
-cd counter
-../ca2024asm/ca2024asm/asm.exe imem0.asm imem0.txt dmem0.txt
-../ca2024asm/ca2024asm/asm.exe imem1.asm imem1.txt dmem1.txt
-../ca2024asm/ca2024asm/asm.exe imem2.asm imem2.txt dmem2.txt
-../ca2024asm/ca2024asm/asm.exe imem3.asm imem3.txt dmem3.txt
 
-Assembler Usage:
+5.	Validate required 28 files per folder
 
-asm program.asm imem.txt dmem.txt
+'counter','mulserial','mulparallel' | % { $f = Get-ChildItem $_ | ? { $.Name -match '^(sim.exe|imem[0-3].txt|memin.txt|memout.txt|regout[0-3].txt|core[0-3]trace.txt|bustrace.txt|dsram[0-3].txt|tsram[0-3].txt|stats[0-3].txt)$' } "{0}: {1} files" -f $, $f.Count if ($f.Count -ne 28) { Write-Error "$_ MISSING FILES" } }
 
-Step 3: Run the Simulator
+6.	Optional: explicit 27-arg run (counter) Push-Location counter;
 
-cd counter
-../sim.exe imem0.txt imem1.txt imem2.txt imem3.txt \
-           memin.txt memout.txt \
-           regout0.txt regout1.txt regout2.txt regout3.txt \
-           core0trace.txt core1trace.txt core2trace.txt core3.txt \
-           bustrace.txt \
-           dsram0.txt dsram1.txt dsram2.txt dsram3.txt \
-           tsram0.txt tsram1.txt tsram2.txt tsram3.txt \
-           stats0.txt stats1.txt stats2.txt stats3.txt
-           
-Or run with defaults (if input files are named as expected):
-../sim.exe
+.\sim.exe imem0.txt imem1.txt imem2.txt imem3.txt memin.txt memout.txt regout0.txt regout1.txt regout2.txt regout3.txt core0trace.txt core1trace.txt core2trace.txt core3trace.txt bustrace.txt dsram0.txt dsram1.txt dsram2.txt dsram3.txt tsram0.txt tsram1.txt tsram2.txt tsram3.txt stats0.txt stats1.txt stats2.txt stats3.txt; Pop-Location
+
 
 
 or using vscode:
