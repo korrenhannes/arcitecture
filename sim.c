@@ -108,12 +108,14 @@ typedef struct {
 } WbStage;
 
 typedef struct {
+    // DSRAM: data words; TSRAM represented separately by tag/state arrays
     uint32_t data[CACHE_WORDS];
     uint16_t tag[CACHE_LINES];
     uint8_t state[CACHE_LINES];
 } Cache;
 
 typedef struct {
+    // Stats counters collected per core and dumped to stats?.txt
     uint32_t cycles;
     uint32_t instructions;
     uint32_t read_hit;
@@ -152,7 +154,7 @@ typedef struct {
 } BusRequest;
 
 typedef struct {
-    int phase; // 0 idle, 1 wait, 2 flush
+    int phase; // 0 idle, 1 wait (memory latency), 2 flush (streaming data words)
     int cmd;   // BUS_RD or BUS_RDX for current transaction
     int origin;
     uint32_t addr; // requested word address
@@ -181,6 +183,7 @@ static int32_t sign_extend(uint32_t val, int bits) {
 }
 
 static Instruction decode_inst(uint32_t raw, int pc) {
+    // Breaks the 32-bit word into opcode/rd/rs/rt/immediate and caches PC
     Instruction inst;
     inst.raw = raw;
     inst.op = (raw >> 24) & 0xFF;
@@ -193,6 +196,7 @@ static Instruction decode_inst(uint32_t raw, int pc) {
 }
 
 static int dest_reg(const Instruction *inst) {
+    // Returns architectural destination register index, or -1 if none
     if (inst->op == OP_HALT || inst->op == OP_SW)
         return -1;
     if (inst->op >= OP_BEQ && inst->op <= OP_BGE)
@@ -206,6 +210,7 @@ static int dest_reg(const Instruction *inst) {
 
 static void source_regs(const Instruction *inst, int *out, int *count) {
     *count = 0;
+    // Order of sources is irrelevant here; used only for hazard detection
     switch (inst->op) {
     case OP_ADD: case OP_SUB: case OP_AND: case OP_OR: case OP_XOR:
     case OP_MUL: case OP_SLL: case OP_SRA: case OP_SRL:
@@ -553,7 +558,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
     int max_cycles = -1;
     if (limit_env)
         max_cycles = atoi(limit_env);
-    bool debug_branch = getenv("SIM_DEBUG_BRANCH") != NULL;
+    bool debug_branch = getenv("SIM_DEBUG_BRANCH") != NULL; // optional stderr logging for branch decisions
 
     // file order: 0-3 imem, 4 memin, 5 memout, 6-9 regout, 10-13 coretrace, 14 bustrace,
     // 15-18 dsram, 19-22 tsram, 23-26 stats
@@ -578,15 +583,23 @@ static void simulate(const char **files, uint32_t *main_mem) {
     load_mem(files[4], main_mem);
     FILE *bus_fp = fopen(files[14], "wt");
 
+    // Each core owns a slot in requests[]; when a miss/upgrade happens MEM sets active=true and waits for arbitration.
     int cycle = 0;
+    // Cycle order:
+    // 1) Capture traces for current latch contents
+    // 2) Commit WB writes
+    // 3) Compute next-state for all pipeline stages (no forwarding)
+    // 4) Arbitrate bus requests and drive bus outputs
+    // 5) Advance bus timing (flush/latency)
+    // 6) Check for completion/timeout
     while (1) {
         reset_bus_out(&bus);
 
-        // trace before state changes
+        // trace before state changes (Q state of pipeline latches)
         for (int i = 0; i < NUM_CORES; i++)
             write_core_trace(cycle, &cores[i]);
 
-        // commit WB
+        // WB stage: commit register writes and mark HALT retirement
         for (int i = 0; i < NUM_CORES; i++) {
             Core *c = &cores[i];
             if (c->wb.valid) {
@@ -599,7 +612,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
             }
         }
 
-        // pipeline advance
+        // pipeline advance (simulate combinational logic for next cycle)
         for (int i = 0; i < NUM_CORES; i++) {
             Core *c = &cores[i];
             if (!c->done)
@@ -613,8 +626,10 @@ static void simulate(const char **files, uint32_t *main_mem) {
 
             bool mem_advances = false;
 
+            // MEM stage: handle cache access, misses enqueue bus requests
             if (c->mem.valid) {
                 if (c->mem.waiting) {
+                    // Waiting for bus transaction to complete
                     c->stats.mem_stall++;
                     mem_advances = false;
                 } else {
@@ -682,6 +697,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
             bool exec_can_move = c->exec.valid && mem_free_next;
             bool exec_free_next = (!c->exec.valid) || exec_can_move;
 
+            // EXEC stage: execute ALU or compute addresses, then hand to MEM
             if (c->exec.valid && exec_can_move) {
                 Instruction *inst = &c->exec.inst;
                 next_exec.valid = false;
@@ -704,6 +720,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
                 }
             }
 
+            // DECODE stage: hazard detection (no forwarding) + branch resolution
             bool decode_has_inst = c->decode.valid;
             bool decode_stall = false;
             if (decode_has_inst) {
@@ -715,6 +732,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
                     int reg = srcs[s];
                     if (reg <= 1)
                         continue;
+                    // No forwarding: any in-flight writer to the same reg forces a stall
                     if (c->exec.valid && dest_reg(&c->exec.inst) == reg)
                         decode_stall = true;
                     if (c->mem.valid && dest_reg(&c->mem.inst) == reg)
@@ -740,6 +758,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
                 next_exec.rt_val = c->regs[inst->rt];
                 next_exec.rd_val = c->regs[inst->rd];
 
+                // Branch/jump resolve in decode; delay slot is the following instruction already in fetch
                 if (inst->op >= OP_BEQ && inst->op <= OP_BGE) {
                     bool taken = perform_compare(inst, next_exec.rs_val, next_exec.rt_val);
                     if (debug_branch && c->id == 3) {
@@ -768,6 +787,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
                 next_decode.inst = c->fetch.inst;
             }
 
+            // FETCH stage: pull next instruction unless halted or decode is blocked
             if (!c->stop_fetch && decode_free_next) {
                 if (c->redirect_pending) {
                     // branch/jump taken: fetch target while delay slot advances
@@ -818,7 +838,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
             }
         }
 
-        // determine bus output for this cycle
+        // determine bus output for this cycle (flush beats waiting)
         if (bus.phase == 2) {
             bus.bus_cmd_out = BUS_FLUSH;
             bus.bus_origid_out = bus.provider;
@@ -837,7 +857,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
 
         write_bus_trace(bus_fp, cycle, &bus);
 
-        // advance bus state
+        // advance bus state (latency countdown or streaming flush)
         if (bus.phase == 1 && bus.delay > 0) {
             bus.delay--;
         } else if (bus.phase == 2 && bus.bus_cmd_out == BUS_FLUSH) {
