@@ -190,26 +190,29 @@ int main(int argc, char *argv[])
 
 		// parse imm
 		p = strtok(NULL, "\t ,");
-		if (p == NULL)
-			continue;
-		printf("next token: %s\n", p);
-		if (p[0] == '0' && p[1] == 'x')
-			sscanf(p + 2, "%x", &imm);
-		else if (isalpha(*p)) {
-			printf("saving jumplabels[%d] = %s\n", PC, p);
-			strcpy(jumplabels[PC], p);
-			q = &jumplabels[PC][0];
-			while (*q) {
-//				printf("*q == %x\n", *q);
-				if (*q == 'n' || *q == 0xd || *q == 0xa) {
-					*q = 0;
-					break;
-				}
-				q++;
-			}
+		if (p == NULL) {
+			// default immediate to 0 if missing (for readability in source)
 			imm = 0;
-		} else
-			sscanf(p, "%d", &imm);
+		} else {
+			printf("next token: %s\n", p);
+			if (p[0] == '0' && p[1] == 'x')
+				sscanf(p + 2, "%x", &imm);
+			else if (isalpha(*p)) {
+				printf("saving jumplabels[%d] = %s\n", PC, p);
+				strcpy(jumplabels[PC], p);
+				q = &jumplabels[PC][0];
+				while (*q) {
+//				printf("*q == %x\n", *q);
+					if (*q == 'n' || *q == 0xd || *q == 0xa) {
+						*q = 0;
+						break;
+					}
+					q++;
+				}
+				imm = 0;
+			} else
+				sscanf(p, "%d", &imm);
+		}
 		imm = sbs(imm, 11, 0);
 		printf("imm: matched 0x%04x\n", imm);
 

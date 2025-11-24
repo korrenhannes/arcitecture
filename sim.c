@@ -892,6 +892,13 @@ static void simulate(const char **files, uint32_t *main_mem) {
     if (bus_fp)
         fclose(bus_fp);
 
+    // Write back all dirty cache lines to main memory before dumping outputs
+    for (int c = 0; c < NUM_CORES; c++) {
+        for (int idx = 0; idx < CACHE_LINES; idx++) {
+            writeback_line(&cores[c].cache, idx, main_mem);
+        }
+    }
+
     // outputs
     write_trimmed_mem(files[5], main_mem, MAIN_MEM_WORDS);
     for (int i = 0; i < NUM_CORES; i++) {
