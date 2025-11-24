@@ -35,7 +35,29 @@ Or run with defaults (if input files are named as expected):
 
 or
 
-
+Build the simulator (from the project root):
+cd "/Users/korrenhannes/Library/Mobile Documents/com~apple~CloudDocs/Documents/homework/arcitecture"
+gcc -std=c99 -Wall -Wextra -O2 sim.c -o sim
+Run against the provided example bundle (writes outputs to /tmp/verify):
+mkdir -p /tmp/verify
+./sim example_221125_win/imem0.txt example_221125_win/imem1.txt example_221125_win/imem2.txt example_221125_win/imem3.txt \
+      example_221125_win/memin.txt /tmp/verify/memout.txt \
+      /tmp/verify/regout0.txt /tmp/verify/regout1.txt /tmp/verify/regout2.txt /tmp/verify/regout3.txt \
+      /tmp/verify/core0trace.txt /tmp/verify/core1trace.txt /tmp/verify/core2trace.txt /tmp/verify/core3trace.txt \
+      /tmp/verify/bustrace.txt \
+      /tmp/verify/dsram0.txt /tmp/verify/dsram1.txt /tmp/verify/dsram2.txt /tmp/verify/dsram3.txt \
+      /tmp/verify/tsram0.txt /tmp/verify/tsram1.txt /tmp/verify/tsram2.txt /tmp/verify/tsram3.txt \
+      /tmp/verify/stats0.txt /tmp/verify/stats1.txt /tmp/verify/stats2.txt /tmp/verify/stats3.txt
+Run your test bundles (from the project root; adjust paths for mulserial/mulparallel similarly):
+./sim counter/imem0.txt counter/imem1.txt counter/imem2.txt counter/imem3.txt \
+      counter/memin.txt counter/memout.txt \
+      counter/regout0.txt counter/regout1.txt counter/regout2.txt counter/regout3.txt \
+      counter/core0trace.txt counter/core1trace.txt counter/core2trace.txt counter/core3trace.txt \
+      counter/bustrace.txt \
+      counter/dsram0.txt counter/dsram1.txt counter/dsram2.txt counter/dsram3.txt \
+      counter/tsram0.txt counter/tsram1.txt counter/tsram2.txt counter/tsram3.txt \
+      counter/stats0.txt counter/stats1.txt counter/stats2.txt counter/stats3.txt
+(or simply cd counter && ./sim since the files are already there and named as defaults).
 
 
 
