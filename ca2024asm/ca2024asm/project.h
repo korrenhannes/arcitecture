@@ -17,8 +17,6 @@
 #define OP_JAL 15
 #define OP_LW  16
 #define OP_SW  17
-#define OP_LL  18
-#define OP_SC  19
 #define OP_HALT 20
 
 // instruction memory
