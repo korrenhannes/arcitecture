@@ -48,7 +48,7 @@ Or run with defaults (if input files are named as expected):
 ../sim.exe
 
 
-or
+or using vscode:
 
 Build the simulator (from the project root):
 
