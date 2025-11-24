@@ -1,3 +1,6 @@
+// Simulator for 4 pipelined cores with private caches and MESI snooping bus.
+// Implements 5-stage pipeline with decode-based hazard stalls and delay-slot branches.
+// Caches are direct mapped, write-back, write-allocate; bus is single transaction per cycle with round-robin arbitration.
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
@@ -334,6 +337,7 @@ static inline uint32_t line_base_addr(uint32_t tag, int index) {
 }
 
 static void writeback_line(Cache *c, int idx, uint32_t *mem) {
+    // Write back dirty block before eviction
     if (c->state[idx] != MESI_M)
         return;
     uint32_t base = line_base_addr(c->tag[idx], idx);
@@ -344,6 +348,7 @@ static void writeback_line(Cache *c, int idx, uint32_t *mem) {
 }
 
 static void fill_cache_line(Cache *c, int idx, uint32_t tag, const uint32_t *block, int new_state, uint32_t *mem) {
+    // Evict + fill helper used by bus completion
     writeback_line(c, idx, mem);
     for (int i = 0; i < BLOCK_WORDS; i++)
         c->data[idx * BLOCK_WORDS + i] = block[i];
@@ -352,6 +357,7 @@ static void fill_cache_line(Cache *c, int idx, uint32_t tag, const uint32_t *blo
 }
 
 static bool cache_lookup(Cache *c, uint32_t addr, int *state_out) {
+    // Direct-mapped lookup, returns true on tag hit
     int idx = cache_index(addr);
     uint32_t tag = cache_tag(addr);
     if (c->state[idx] != MESI_I && c->tag[idx] == tag) {
@@ -385,6 +391,7 @@ static void reset_bus_out(BusState *bus) {
 }
 
 static void complete_transaction(BusState *bus, Core cores[NUM_CORES], uint32_t *mem) {
+    // Flush completes: memory gets the block, requester cache filled
     if (bus->origin < 0 || bus->origin >= NUM_CORES)
         return;
     uint32_t base = bus->addr & ~(BLOCK_WORDS - 1);
@@ -405,6 +412,7 @@ static void complete_transaction(BusState *bus, Core cores[NUM_CORES], uint32_t 
 }
 
 static void apply_snoop(Cache *cache, int cache_id, int origin, int cmd, uint32_t addr, int *shared, int *provider, uint32_t *provider_block) {
+    // Snooping reactions: invalidate/transition and optionally source data
     if (cache_id == origin)
         return;
     int idx = cache_index(addr);
@@ -431,6 +439,7 @@ static void apply_snoop(Cache *cache, int cache_id, int origin, int cmd, uint32_
 }
 
 static void start_bus_transaction(BusState *bus, const BusRequest *req, Core cores[NUM_CORES], uint32_t *mem) {
+    // Capture snapshot of request and decide data source (memory or peer cache)
     bus->cmd = req->cmd;
     bus->origin = req->origin;
     bus->addr = req->addr;
@@ -472,6 +481,7 @@ static void start_bus_transaction(BusState *bus, const BusRequest *req, Core cor
 static void write_core_trace(int cycle, const Core *c) {
     if (!c->trace_fp)
         return;
+    // Only dump a line when something is in flight in the pipeline
     bool active = c->fetch.valid || c->decode.valid || c->exec.valid || c->mem.valid || c->wb.valid;
     if (!active)
         return;
@@ -746,6 +756,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
                     c->redirect_pc = c->regs[inst->rd] & 0x3FF;
                 }
 
+                // R1 always mirrors the current instruction immediate (decoded in this cycle)
                 c->regs[1] = inst->imm;
                 next_decode.valid = false;
             } else if (!decode_stall) {
@@ -802,6 +813,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
                 rr_next = (chosen + 1) % NUM_CORES;
                 BusRequest req = requests[chosen];
                 requests[chosen].active = false;
+                // Round-robin winner starts transaction; others will retry next cycle
                 start_bus_transaction(&bus, &req, cores, main_mem);
             }
         }
