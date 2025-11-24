@@ -1,30 +1,57 @@
 1.	Build both executables and verify paths
 
-msbuild .\sim.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /p:OutDir=.\x64\Release\ /p:IntDir=.\x64\Release\sim_int; msbuild .\ca2024asm\ca2024asm.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64; Get-Item .\x64\Release\sim.exe; Get-Item .\ca2024asm\x64\Release\ca2024asm.exe
+msbuild .\sim.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 /p:OutDir=.\x64\Release\ /p:IntDir=.\x64\Release\sim_int
+msbuild .\ca2024asm\ca2024asm.vcxproj /t:Build /p:Configuration=Release /p:Platform=x64 
+Get-Item .\x64\Release\sim.exe; Get-Item .\ca2024asm\x64\Release\ca2024asm.exe
 
 2.	COUNTER test
 
-(assemble only imem, keep memin.txt) 0..3 | % { .\ca2024asm\x64\Release\ca2024asm.exe "counter\imem$.asm" "counter\imem$.txt" "counter\dummy.txt" }; Copy-Item .\x64\Release\sim.exe .\counter\sim.exe -Force; Push-Location counter; .\sim.exe; Pop-Location; if ((Get-Content .\counter\memout.txt)[0] -ne '00000200') { Write-Error 'COUNTER FAILED' } else { 'COUNTER OK' }
+0..3 | % { & .\ca2024asm\x64\Release\ca2024asm.exe "counter\imem$($_).asm" "counter\imem$($_).txt" "counter\dummy.txt" }
+Copy-Item .\x64\Release\sim.exe .\counter\sim.exe -Force
+Push-Location counter
+.\sim.exe
+Pop-Location
+$first = Get-Content .\counter\memout.txt -TotalCount 1
+if ($first -ne '00000200') { Write-Error 'COUNTER FAILED' } else { 'COUNTER OK' }
 
 
 3.	SERIAL matrix test
 
-0..3 | % { .\ca2024asm\x64\Release\ca2024asm.exe "mulserial\imem$.asm" "mulserial\imem$.txt" "mulserial\dummy.txt" }; Copy-Item .\x64\Release\sim.exe .\mulserial\sim.exe -Force; Push-Location mulserial; .\sim.exe; Pop-Location; (Get-Content .\mulserial\memout.txt | Select-Object -Last 20)
+0..3 | % { & .\ca2024asm\x64\Release\ca2024asm.exe "mulserial\imem$($_).asm" "mulserial\imem$($_).txt" "mulserial\dummy.txt" }
+Copy-Item .\x64\Release\sim.exe .\mulserial\sim.exe -Force
+Push-Location mulserial
+.\sim.exe
+Pop-Location
+Get-Content .\mulserial\memout.txt | Select-Object -Last 20
+
 
 
 4.	PARALLEL matrix test
 
-0..3 | % { .\ca2024asm\x64\Release\ca2024asm.exe "mulparallel\imem$.asm" "mulparallel\imem$.txt" "mulparallel\dummy.txt" }; Copy-Item .\x64\Release\sim.exe .\mulparallel\sim.exe -Force; Push-Location mulparallel; .\sim.exe; Pop-Location; (Get-Content .\mulparallel\memout.txt | Select-Object -Last 20)
+0..3 | % { & .\ca2024asm\x64\Release\ca2024asm.exe "mulparallel\imem$($_).asm" "mulparallel\imem$($_).txt" "mulparallel\dummy.txt" }
+Copy-Item .\x64\Release\sim.exe .\mulparallel\sim.exe -Force
+Push-Location mulparallel
+.\sim.exe
+Pop-Location
+Get-Content .\mulparallel\memout.txt | Select-Object -Last 20
 
 
 5.	Validate required 28 files per folder
 
-'counter','mulserial','mulparallel' | % { $f = Get-ChildItem $_ | ? { $.Name -match '^(sim.exe|imem[0-3].txt|memin.txt|memout.txt|regout[0-3].txt|core[0-3]trace.txt|bustrace.txt|dsram[0-3].txt|tsram[0-3].txt|stats[0-3].txt)$' } "{0}: {1} files" -f $, $f.Count if ($f.Count -ne 28) { Write-Error "$_ MISSING FILES" } }
+0..3 | % { & .\ca2024asm\x64\Release\ca2024asm.exe "mulparallel\imem$($_).asm" "mulparallel\imem$($_).txt" "mulparallel\dummy.txt" }
+Copy-Item .\x64\Release\sim.exe .\mulparallel\sim.exe -Force
+Push-Location mulparallel
+.\sim.exe
+Pop-Location
+Get-Content .\mulparallel\memout.txt | Select-Object -Last 20
 
 6.	Optional: explicit 27-arg run (counter) Push-Location counter;
 
-.\sim.exe imem0.txt imem1.txt imem2.txt imem3.txt memin.txt memout.txt regout0.txt regout1.txt regout2.txt regout3.txt core0trace.txt core1trace.txt core2trace.txt core3trace.txt bustrace.txt dsram0.txt dsram1.txt dsram2.txt dsram3.txt tsram0.txt tsram1.txt tsram2.txt tsram3.txt stats0.txt stats1.txt stats2.txt stats3.txt; Pop-Location
-
+'counter','mulserial','mulparallel' | % {
+  $f = Get-ChildItem $_ | Where-Object { $_.Name -match '^(sim\.exe|imem[0-3]\.txt|memin\.txt|memout\.txt|regout[0-3]\.txt|core[0-3]trace\.txt|bustrace\.txt|dsram[0-3]\.txt|tsram[0-3]\.txt|stats[0-3]\.txt)$' }
+  "{0}: {1} files" -f $_, $f.Count
+  if ($f.Count -ne 28) { Write-Error "$_ MISSING FILES" }
+}
 
 
 or using vscode:
