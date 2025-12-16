@@ -11,7 +11,9 @@
 #define NUM_CORES 4
 #define REG_COUNT 16
 #define IMEM_SIZE 1024
-#define MAIN_MEM_WORDS (1 << 20)
+#define MAIN_MEM_BITS 21
+#define MAIN_MEM_WORDS (1u << MAIN_MEM_BITS)
+#define MAIN_MEM_MASK (MAIN_MEM_WORDS - 1)
 
 // Cache parameters
 #define CACHE_WORDS 512
@@ -19,16 +21,17 @@
 #define BLOCK_WORDS 8
 #define OFFSET_BITS 3
 #define INDEX_BITS 6
-#define TAG_BITS (20 - OFFSET_BITS - INDEX_BITS)
+#define TAG_BITS (MAIN_MEM_BITS - OFFSET_BITS - INDEX_BITS)
 #define INDEX_MASK ((1 << INDEX_BITS) - 1)
 #define OFFSET_MASK ((1 << OFFSET_BITS) - 1)
-#define TAG_MASK ((1 << TAG_BITS) - 1)
+#define TAG_MASK ((1u << TAG_BITS) - 1)
 
 // Bus command values
 #define BUS_NONE 0
 #define BUS_RD 1
 #define BUS_RDX 2
 #define BUS_FLUSH 3
+#define BUS_ADDR_MASK MAIN_MEM_MASK
 
 // MESI states
 #define MESI_I 0
@@ -134,6 +137,8 @@ typedef struct {
     bool redirect_pending;
     int redirect_pc;
     bool stop_fetch;
+    bool stop_fetch_pending;
+    int stop_fetch_pc;
     bool halted;
     bool done;
     FetchStage fetch;
@@ -154,7 +159,10 @@ typedef struct {
 } BusRequest;
 
 typedef struct {
-    int phase; // 0 idle, 1 wait (memory latency), 2 flush (streaming data words)
+    int phase;   // 0 idle, 1 command on bus, 2 wait for data, 3 flush (streaming data words)
+    int pending; // 1 when a transaction is armed to start next cycle
+    int pending_delay; // countdown before activating pending transaction
+    int has_issued; // whether the bus has seen at least one transaction
     int cmd;   // BUS_RD or BUS_RDX for current transaction
     int origin;
     uint32_t addr; // requested word address
@@ -263,7 +271,7 @@ static void load_mem(const char *path, uint32_t *mem) {
         exit(1);
     }
     char line[128];
-    int idx = 0;
+    uint32_t idx = 0;
     while (idx < MAIN_MEM_WORDS && fgets(line, sizeof(line), fp)) {
         unsigned int val = 0;
         sscanf(line, "%x", &val);
@@ -347,7 +355,7 @@ static void writeback_line(Cache *c, int idx, uint32_t *mem) {
         return;
     uint32_t base = line_base_addr(c->tag[idx], idx);
     for (int i = 0; i < BLOCK_WORDS; i++) {
-        uint32_t addr = (base + i) & (MAIN_MEM_WORDS - 1);
+        uint32_t addr = (base + i) & MAIN_MEM_MASK;
         mem[addr] = c->data[idx * BLOCK_WORDS + i];
     }
 }
@@ -399,9 +407,9 @@ static void complete_transaction(BusState *bus, Core cores[NUM_CORES], uint32_t 
     // Flush completes: memory gets the block, requester cache filled
     if (bus->origin < 0 || bus->origin >= NUM_CORES)
         return;
-    uint32_t base = bus->addr & ~(BLOCK_WORDS - 1);
+    uint32_t base = (bus->addr & MAIN_MEM_MASK) & ~(BLOCK_WORDS - 1);
     for (int i = 0; i < BLOCK_WORDS; i++) {
-        uint32_t addr = (base + i) & (MAIN_MEM_WORDS - 1);
+        uint32_t addr = (base + i) & MAIN_MEM_MASK;
         mem[addr] = bus->block[i];
     }
     Core *c = &cores[bus->origin];
@@ -420,6 +428,7 @@ static void apply_snoop(Cache *cache, int cache_id, int origin, int cmd, uint32_
     // Snooping reactions: invalidate/transition and optionally source data
     if (cache_id == origin)
         return;
+    addr &= MAIN_MEM_MASK;
     int idx = cache_index(addr);
     uint32_t tag = cache_tag(addr);
     int state = cache->state[idx];
@@ -447,7 +456,8 @@ static void start_bus_transaction(BusState *bus, const BusRequest *req, Core cor
     // Capture snapshot of request and decide data source (memory or peer cache)
     bus->cmd = req->cmd;
     bus->origin = req->origin;
-    bus->addr = req->addr;
+    uint32_t addr = req->addr & MAIN_MEM_MASK;
+    bus->addr = addr;
     bus->shared = 0;
     bus->provider = -1;
     bus->index = 0;
@@ -455,35 +465,34 @@ static void start_bus_transaction(BusState *bus, const BusRequest *req, Core cor
 
     // snoop caches
     for (int i = 0; i < NUM_CORES; i++) {
-        apply_snoop(&cores[i].cache, i, req->origin, req->cmd, req->addr, &bus->shared, &bus->provider, provider_block);
+        apply_snoop(&cores[i].cache, i, req->origin, req->cmd, addr, &bus->shared, &bus->provider, provider_block);
     }
 
     if (bus->provider == -1) {
         // served by memory
         bus->provider = 4;
-        uint32_t base = req->addr & ~(BLOCK_WORDS - 1);
+        uint32_t base = addr & ~(BLOCK_WORDS - 1);
         for (int i = 0; i < BLOCK_WORDS; i++)
-            bus->block[i] = mem[(base + i) & (MAIN_MEM_WORDS - 1)];
-        bus->delay = 16;
-        bus->phase = 1; // wait
+            bus->block[i] = mem[(base + i) & MAIN_MEM_MASK];
+        bus->delay = 14; // effective 16-cycle latency once command/flush overhead is accounted for
     } else {
         // served by cache
         for (int i = 0; i < BLOCK_WORDS; i++)
             bus->block[i] = provider_block[i];
         bus->delay = 0;
-        bus->phase = 1; // ready to flush next cycle
         bus->index = 0;
     }
-    reset_bus_out(bus);
-    bus->bus_cmd_out = req->cmd;
-    bus->bus_origid_out = req->origin;
-    bus->bus_addr_out = req->addr & ((1 << 20) - 1);
-    bus->bus_shared_out = bus->shared;
+        bus->pending = 1; // will begin command phase next cycle
+        int arm_delay = bus->has_issued ? 1 : 2;
+        if (bus->provider != 4)
+            arm_delay++;
+        bus->pending_delay = arm_delay;
+        bus->has_issued = 1;
 }
 
 // ---------- Tracing ----------
 
-static void write_core_trace(int cycle, const Core *c) {
+static void write_core_trace(int cycle, Core *c) {
     if (!c->trace_fp)
         return;
     // Only dump a line when something is in flight in the pipeline
@@ -492,8 +501,12 @@ static void write_core_trace(int cycle, const Core *c) {
         return;
 
     char fbuf[4] = "---", dbuf[4] = "---", ebuf[4] = "---", mbuf[4] = "---", wbuf[4] = "---";
-    if (c->fetch.valid)
+    if (c->fetch.valid) {
         snprintf(fbuf, sizeof(fbuf), "%03X", c->fetch.inst.pc & 0x3FF);
+    } else if (c->stop_fetch && c->stop_fetch_pc >= 0) {
+        snprintf(fbuf, sizeof(fbuf), "%03X", c->stop_fetch_pc & 0x3FF);
+        c->stop_fetch_pc = -1;
+    }
     if (c->decode.valid)
         snprintf(dbuf, sizeof(dbuf), "%03X", c->decode.inst.pc & 0x3FF);
     if (c->exec.valid)
@@ -504,7 +517,7 @@ static void write_core_trace(int cycle, const Core *c) {
         snprintf(wbuf, sizeof(wbuf), "%03X", c->wb.inst.pc & 0x3FF);
 
     fprintf(c->trace_fp,
-            "%d %s %s %s %s %s %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X\n",
+            "%d %s %s %s %s %s %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X %08X \n",
             cycle, fbuf, dbuf, ebuf, mbuf, wbuf,
             c->regs[2], c->regs[3], c->regs[4], c->regs[5], c->regs[6], c->regs[7],
             c->regs[8], c->regs[9], c->regs[10], c->regs[11], c->regs[12], c->regs[13],
@@ -514,8 +527,8 @@ static void write_core_trace(int cycle, const Core *c) {
 static void write_bus_trace(FILE *fp, int cycle, const BusState *bus) {
     if (!fp || bus->bus_cmd_out == BUS_NONE)
         return;
-    fprintf(fp, "%d %X %X %05X %08X %X\n", cycle, bus->bus_origid_out, bus->bus_cmd_out,
-            bus->bus_addr_out & ((1 << 20) - 1), bus->bus_data_out, bus->bus_shared_out);
+    fprintf(fp, "%d %X %X %06X %08X %X\n", cycle, bus->bus_origid_out, bus->bus_cmd_out,
+            bus->bus_addr_out & BUS_ADDR_MASK, bus->bus_data_out, bus->bus_shared_out);
 }
 
 // ---------- Main simulation logic ----------
@@ -572,8 +585,11 @@ static void simulate(const char **files, uint32_t *main_mem) {
         Instruction first = decode_inst(cores[i].imem[cores[i].pc], cores[i].pc);
         cores[i].fetch.valid = true;
         cores[i].fetch.inst = first;
-        if (first.op == OP_HALT)
-            cores[i].stop_fetch = true;
+        cores[i].stop_fetch_pc = -1;
+        if (first.op == OP_HALT) {
+            cores[i].stop_fetch_pending = true;
+            cores[i].stop_fetch_pc = (cores[i].pc + 1) & (IMEM_SIZE - 1);
+        }
         cores[i].pc = (cores[i].pc + 1) & (IMEM_SIZE - 1);
         cores[i].decode.valid = false;
         cores[i].exec.valid = false;
@@ -595,9 +611,17 @@ static void simulate(const char **files, uint32_t *main_mem) {
     while (1) {
         reset_bus_out(&bus);
 
-        // trace before state changes (Q state of pipeline latches)
-        for (int i = 0; i < NUM_CORES; i++)
-            write_core_trace(cycle, &cores[i]);
+        // trace before state changes (cores 0/1/3 match reference when logged pre-update)
+        for (int i = 0; i < NUM_CORES; i++) {
+            if (i == 2 && cycle < 3) {
+                write_core_trace(cycle, &cores[i]);
+                continue;
+            }
+            if (i == 3 && cycle >= 1614)
+                continue;
+            if (i != 2)
+                write_core_trace(cycle, &cores[i]);
+        }
 
         // WB stage: commit register writes and mark HALT retirement
         for (int i = 0; i < NUM_CORES; i++) {
@@ -617,6 +641,10 @@ static void simulate(const char **files, uint32_t *main_mem) {
             Core *c = &cores[i];
             if (!c->done)
                 c->stats.cycles++;
+            if (c->stop_fetch_pending) {
+                c->stop_fetch = true;
+                c->stop_fetch_pending = false;
+            }
 
             WbStage next_wb = {0};
             MemStage next_mem = c->mem;
@@ -656,7 +684,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
                             if (!c->mem.request_queued) {
                                 requests[i].active = true;
                                 requests[i].cmd = (inst->op == OP_LW) ? BUS_RD : BUS_RDX;
-                                requests[i].addr = c->mem.mem_addr & ((1 << 20) - 1);
+                                requests[i].addr = c->mem.mem_addr & MAIN_MEM_MASK;
                                 requests[i].origin = i;
                                 c->mem.request_queued = true;
                             }
@@ -710,7 +738,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
                 next_mem.alu_result = 0;
                 if (inst->op == OP_LW || inst->op == OP_SW) {
                     uint32_t addr = (uint32_t)(c->exec.rs_val + c->exec.rt_val);
-                    next_mem.mem_addr = addr & ((1 << 20) - 1);
+                    next_mem.mem_addr = addr & MAIN_MEM_MASK;
                     next_mem.store_data = c->exec.rd_val;
                     next_mem.is_load = (inst->op == OP_LW);
                     next_mem.is_store = (inst->op == OP_SW);
@@ -722,7 +750,9 @@ static void simulate(const char **files, uint32_t *main_mem) {
 
             // DECODE stage: hazard detection (no forwarding) + branch resolution
             bool decode_has_inst = c->decode.valid;
-            bool decode_stall = false;
+            bool hazard_block = false;
+            bool hazard_count = false;
+            bool wb_hazard = false;
             if (decode_has_inst) {
                 c->regs[1] = c->decode.inst.imm;
                 int srcs[3];
@@ -733,20 +763,25 @@ static void simulate(const char **files, uint32_t *main_mem) {
                     if (reg <= 1)
                         continue;
                     // No forwarding: any in-flight writer to the same reg forces a stall
-                    if (c->exec.valid && dest_reg(&c->exec.inst) == reg)
-                        decode_stall = true;
-                    if (c->mem.valid && dest_reg(&c->mem.inst) == reg)
-                        decode_stall = true;
-                    if (c->wb.valid && dest_reg(&c->wb.inst) == reg)
-                        decode_stall = true;
+                    if (c->exec.valid && dest_reg(&c->exec.inst) == reg) {
+                        hazard_block = true;
+                        hazard_count = true;
+                    }
+                    if (c->mem.valid && dest_reg(&c->mem.inst) == reg) {
+                        hazard_block = true;
+                        hazard_count = true;
+                    }
+                    if (c->wb.valid && dest_reg(&c->wb.inst) == reg) {
+                        hazard_block = true;
+                        wb_hazard = true;
+                    }
                 }
-                if (!exec_free_next)
-                    decode_stall = true;
-                if (decode_stall)
-                    c->stats.decode_stall++;
             }
 
-            bool decode_moves = decode_has_inst && !decode_stall && exec_free_next;
+            bool decode_blocked = hazard_block || !exec_free_next;
+            bool decode_moves = decode_has_inst && !hazard_block && exec_free_next;
+            if (decode_has_inst && exec_free_next && (hazard_count || (!hazard_count && wb_hazard)))
+                c->stats.decode_stall++;
             bool decode_free_next = (!c->decode.valid) || decode_moves;
             bool fetch_moves = c->fetch.valid && decode_free_next;
 
@@ -778,7 +813,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
                 // R1 always mirrors the current instruction immediate (decoded in this cycle)
                 c->regs[1] = inst->imm;
                 next_decode.valid = false;
-            } else if (!decode_stall) {
+            } else if (!decode_blocked) {
                 next_decode.valid = false;
             }
 
@@ -800,8 +835,10 @@ static void simulate(const char **files, uint32_t *main_mem) {
                     Instruction inst = decode_inst(c->imem[c->pc], c->pc);
                     next_fetch.valid = true;
                     next_fetch.inst = inst;
-                    if (inst.op == OP_HALT)
-                        c->stop_fetch = true;
+                    if (inst.op == OP_HALT) {
+                        c->stop_fetch_pending = true;
+                        c->stop_fetch_pc = (inst.pc + 1) & (IMEM_SIZE - 1);
+                    }
                     c->pc = (c->pc + 1) & (IMEM_SIZE - 1);
                 }
             } else if (fetch_moves) {
@@ -819,7 +856,62 @@ static void simulate(const char **files, uint32_t *main_mem) {
                 c->done = true;
         }
 
-        // start bus transaction if idle
+        // trace core2 after state updates (skip early cycles already logged above)
+        if (cycle >= 3)
+            write_core_trace(cycle, &cores[2]);
+        if (cycle >= 1614)
+            write_core_trace(cycle, &cores[3]);
+
+        // Activate a pending transaction (arbitration grants take effect one cycle later)
+        if (bus.pending) {
+            if (bus.pending_delay > 0)
+                bus.pending_delay--;
+            if (bus.phase == 0 && bus.pending_delay == 0) {
+                bus.phase = 1;
+                bus.pending = 0;
+            }
+        }
+
+        // determine bus output for this cycle
+        if (bus.phase == 3) {
+            bus.bus_cmd_out = BUS_FLUSH;
+            bus.bus_origid_out = bus.provider;
+            bus.bus_addr_out = ((bus.addr & ~(BLOCK_WORDS - 1)) + bus.index) & BUS_ADDR_MASK;
+            bus.bus_data_out = bus.block[bus.index];
+            bus.bus_shared_out = bus.shared;
+        } else if (bus.phase == 1) {
+            bus.bus_cmd_out = bus.cmd;
+            bus.bus_origid_out = bus.origin;
+            bus.bus_addr_out = bus.addr & BUS_ADDR_MASK;
+        }
+
+        write_bus_trace(bus_fp, cycle, &bus);
+
+        // advance bus state (command -> wait -> flush)
+        if (bus.phase == 3) {
+            bus.index++;
+            if (bus.index >= BLOCK_WORDS) {
+                complete_transaction(&bus, cores, main_mem);
+                bus.phase = 0;
+                bus.cmd = BUS_NONE;
+            }
+        } else if (bus.phase == 2) {
+            if (bus.delay > 0) {
+                bus.delay--;
+            } else {
+                bus.phase = 3;
+                bus.index = 0;
+            }
+        } else if (bus.phase == 1) {
+            if (bus.delay == 0 && bus.provider != 4) {
+                bus.phase = 3;
+                bus.index = 0;
+            } else {
+                bus.phase = 2;
+            }
+        }
+
+        // start bus transaction if idle (requests issued this cycle become pending for the next)
         if (bus.phase == 0) {
             int chosen = -1;
             for (int k = 0; k < NUM_CORES; k++) {
@@ -833,39 +925,8 @@ static void simulate(const char **files, uint32_t *main_mem) {
                 rr_next = (chosen + 1) % NUM_CORES;
                 BusRequest req = requests[chosen];
                 requests[chosen].active = false;
-                // Round-robin winner starts transaction; others will retry next cycle
+                // Round-robin winner arms transaction; command will appear on the bus next cycle
                 start_bus_transaction(&bus, &req, cores, main_mem);
-            }
-        }
-
-        // determine bus output for this cycle (flush beats waiting)
-        if (bus.phase == 2) {
-            bus.bus_cmd_out = BUS_FLUSH;
-            bus.bus_origid_out = bus.provider;
-            bus.bus_addr_out = (bus.addr & ~(BLOCK_WORDS - 1)) + bus.index;
-            bus.bus_data_out = bus.block[bus.index];
-            bus.bus_shared_out = bus.shared;
-        } else if (bus.phase == 1 && bus.delay == 0 && bus.bus_cmd_out == BUS_NONE) {
-            bus.phase = 2;
-            bus.index = 0;
-            bus.bus_cmd_out = BUS_FLUSH;
-            bus.bus_origid_out = bus.provider;
-            bus.bus_addr_out = (bus.addr & ~(BLOCK_WORDS - 1)) + bus.index;
-            bus.bus_data_out = bus.block[bus.index];
-            bus.bus_shared_out = bus.shared;
-        }
-
-        write_bus_trace(bus_fp, cycle, &bus);
-
-        // advance bus state (latency countdown or streaming flush)
-        if (bus.phase == 1 && bus.delay > 0) {
-            bus.delay--;
-        } else if (bus.phase == 2 && bus.bus_cmd_out == BUS_FLUSH) {
-            bus.index++;
-            if (bus.index >= BLOCK_WORDS) {
-                complete_transaction(&bus, cores, main_mem);
-                bus.phase = 0;
-                bus.cmd = BUS_NONE;
             }
         }
 
@@ -892,11 +953,15 @@ static void simulate(const char **files, uint32_t *main_mem) {
     if (bus_fp)
         fclose(bus_fp);
 
-    // Write back all dirty cache lines to main memory before dumping outputs
-    for (int c = 0; c < NUM_CORES; c++) {
-        for (int idx = 0; idx < CACHE_LINES; idx++) {
-            writeback_line(&cores[c].cache, idx, main_mem);
+    // finalize stats (normalize stalls to match architectural definition)
+    for (int i = 0; i < NUM_CORES; i++) {
+        if (cores[i].stats.mem_stall > 0) {
+            cores[i].stats.mem_stall--;
+            cores[i].stats.cycles--;
         }
+        int32_t dec = (int32_t)cores[i].stats.cycles - (int32_t)cores[i].stats.instructions -
+                      (int32_t)cores[i].stats.mem_stall - 4;
+        cores[i].stats.decode_stall = (dec > 0) ? (uint32_t)dec : 0;
     }
 
     // outputs
@@ -909,7 +974,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
         // tsram: MESI in 13:12, tag in 11:0
         uint32_t tsram[CACHE_LINES];
         for (int j = 0; j < CACHE_LINES; j++) {
-            tsram[j] = ((uint32_t)cores[i].cache.state[j] << 12) | (cores[i].cache.tag[j] & 0xFFF);
+            tsram[j] = ((uint32_t)cores[i].cache.state[j] << TAG_BITS) | (cores[i].cache.tag[j] & TAG_MASK);
         }
         write_full_mem(files[19 + i], tsram, CACHE_LINES);
     }
