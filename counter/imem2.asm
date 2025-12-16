@@ -16,4 +16,6 @@ loop:
 	add $r8, $r8, $imm, -1		# iterations--
 	bgt $r13, $r8, $zero, 0		# loop if iterations > 0
 	add $zero, $zero, $zero, 0	# delay slot nop
+	add $r9, $zero, $imm, 512	# evict counter block to force writeback
+	lw  $zero, $r3, $r9, 0		# conflict-miss eviction
 	halt $zero, $zero, $zero, 0

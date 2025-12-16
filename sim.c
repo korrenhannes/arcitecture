@@ -403,7 +403,7 @@ static void reset_bus_out(BusState *bus) {
     bus->bus_shared_out = 0;
 }
 
-static void complete_transaction(BusState *bus, Core cores[NUM_CORES], uint32_t *mem) {
+static void complete_transaction(int cycle, bool debug_req, BusState *bus, Core cores[NUM_CORES], uint32_t *mem) {
     // Flush completes: memory gets the block, requester cache filled
     if (bus->origin < 0 || bus->origin >= NUM_CORES)
         return;
@@ -420,6 +420,8 @@ static void complete_transaction(BusState *bus, Core cores[NUM_CORES], uint32_t 
 
     if (c->mem.valid && c->mem.waiting) {
         c->mem.waiting = false;
+        if (debug_req)
+            fprintf(stderr, "cycle %d complete origin %d addr %X cleared waiting\n", cycle, bus->origin, bus->addr);
         // allow mem stage to re-access without recounting miss
     }
 }
@@ -571,6 +573,8 @@ static void simulate(const char **files, uint32_t *main_mem) {
     int max_cycles = -1;
     if (limit_env)
         max_cycles = atoi(limit_env);
+    bool final_flush = getenv("SIM_FINAL_FLUSH") != NULL;
+    bool debug_req = getenv("SIM_DEBUG_REQ") != NULL;
     bool debug_branch = getenv("SIM_DEBUG_BRANCH") != NULL; // optional stderr logging for branch decisions
 
     // file order: 0-3 imem, 4 memin, 5 memout, 6-9 regout, 10-13 coretrace, 14 bustrace,
@@ -610,6 +614,8 @@ static void simulate(const char **files, uint32_t *main_mem) {
     // 6) Check for completion/timeout
     while (1) {
         reset_bus_out(&bus);
+        bool completed_txn = false;
+        int completed_cmd = BUS_NONE;
 
         // trace before state changes (cores 0/1/3 match reference when logged pre-update)
         for (int i = 0; i < NUM_CORES; i++) {
@@ -683,11 +689,13 @@ static void simulate(const char **files, uint32_t *main_mem) {
                         if (!hit || state == MESI_I || (inst->op == OP_SW && state == MESI_S)) {
                             if (!c->mem.request_queued) {
                                 requests[i].active = true;
-                                requests[i].cmd = (inst->op == OP_LW) ? BUS_RD : BUS_RDX;
-                                requests[i].addr = c->mem.mem_addr & MAIN_MEM_MASK;
-                                requests[i].origin = i;
-                                c->mem.request_queued = true;
-                            }
+                    requests[i].cmd = (inst->op == OP_LW) ? BUS_RD : BUS_RDX;
+                    requests[i].addr = c->mem.mem_addr & MAIN_MEM_MASK;
+                    requests[i].origin = i;
+                    if (debug_req && cycle < 100)
+                        fprintf(stderr, "cycle %d core%d queue bus cmd %d addr %X\n", cycle, i, requests[i].cmd, requests[i].addr);
+                    c->mem.request_queued = true;
+                }
                             next_mem.miss = true;
                             next_mem.waiting = true;
                             c->stats.mem_stall++;
@@ -891,9 +899,11 @@ static void simulate(const char **files, uint32_t *main_mem) {
         if (bus.phase == 3) {
             bus.index++;
             if (bus.index >= BLOCK_WORDS) {
-                complete_transaction(&bus, cores, main_mem);
+                complete_transaction(cycle, debug_req, &bus, cores, main_mem);
                 bus.phase = 0;
+                completed_cmd = bus.cmd;
                 bus.cmd = BUS_NONE;
+                completed_txn = true;
             }
         } else if (bus.phase == 2) {
             if (bus.delay > 0) {
@@ -912,7 +922,7 @@ static void simulate(const char **files, uint32_t *main_mem) {
         }
 
         // start bus transaction if idle (requests issued this cycle become pending for the next)
-        if (bus.phase == 0) {
+        if (bus.phase == 0 && !bus.pending && !(completed_txn && completed_cmd == BUS_RDX)) {
             int chosen = -1;
             for (int k = 0; k < NUM_CORES; k++) {
                 int idx = (rr_next + k) % NUM_CORES;
@@ -925,6 +935,8 @@ static void simulate(const char **files, uint32_t *main_mem) {
                 rr_next = (chosen + 1) % NUM_CORES;
                 BusRequest req = requests[chosen];
                 requests[chosen].active = false;
+                if (debug_req && cycle < 200)
+                    fprintf(stderr, "cycle %d start bus origin %d cmd %d addr %X\n", cycle, req.origin, req.cmd, req.addr);
                 // Round-robin winner arms transaction; command will appear on the bus next cycle
                 start_bus_transaction(&bus, &req, cores, main_mem);
             }
@@ -964,6 +976,17 @@ static void simulate(const char **files, uint32_t *main_mem) {
         cores[i].stats.decode_stall = (dec > 0) ? (uint32_t)dec : 0;
     }
 
+    // Flush any dirty cache lines so memout reflects the final state
+    if (final_flush) {
+        for (int i = 0; i < NUM_CORES; i++) {
+            for (int j = 0; j < CACHE_LINES; j++) {
+                if (cores[i].cache.state[j] == MESI_M) {
+                    writeback_line(&cores[i].cache, j, main_mem);
+                    cores[i].cache.state[j] = MESI_S;
+                }
+            }
+        }
+    }
     // outputs
     write_trimmed_mem(files[5], main_mem, MAIN_MEM_WORDS);
     for (int i = 0; i < NUM_CORES; i++) {
