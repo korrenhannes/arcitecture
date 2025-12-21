@@ -1,0 +1,34 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     '/Users/korrenhannes/Library/Mobile Documents/com~apple~CloudDocs/Documents/homework/arcitecture/sim'
+relocations:
+  - { offsetInCU: 0x26, offset: 0x26, size: 0x8, addend: 0x0, symName: _main, symObjAddr: 0x0, symBinAddr: 0x100004070, symSize: 0x1D0 }
+  - { offsetInCU: 0x6B, offset: 0x6B, size: 0x8, addend: 0x0, symName: _main, symObjAddr: 0x0, symBinAddr: 0x100004070, symSize: 0x1D0 }
+  - { offsetInCU: 0x10C, offset: 0x10C, size: 0x8, addend: 0x0, symName: _simulate, symObjAddr: 0x1D0, symBinAddr: 0x100004240, symSize: 0x1B74 }
+  - { offsetInCU: 0x6D1, offset: 0x6D1, size: 0x8, addend: 0x0, symName: _load_imem, symObjAddr: 0x1D44, symBinAddr: 0x100005DB4, symSize: 0x178 }
+  - { offsetInCU: 0x741, offset: 0x741, size: 0x8, addend: 0x0, symName: _decode_inst, symObjAddr: 0x1EBC, symBinAddr: 0x100005F2C, symSize: 0x90 }
+  - { offsetInCU: 0x786, offset: 0x786, size: 0x8, addend: 0x0, symName: _load_mem, symObjAddr: 0x1F4C, symBinAddr: 0x100005FBC, symSize: 0x178 }
+  - { offsetInCU: 0x7FD, offset: 0x7FD, size: 0x8, addend: 0x0, symName: _reset_bus_out, symObjAddr: 0x20C4, symBinAddr: 0x100006134, symSize: 0x38 }
+  - { offsetInCU: 0x823, offset: 0x823, size: 0x8, addend: 0x0, symName: _write_core_trace, symObjAddr: 0x20FC, symBinAddr: 0x10000616C, symSize: 0x408 }
+  - { offsetInCU: 0x8B2, offset: 0x8B2, size: 0x8, addend: 0x0, symName: _dest_reg, symObjAddr: 0x2504, symBinAddr: 0x100006574, symSize: 0xE4 }
+  - { offsetInCU: 0x8DA, offset: 0x8DA, size: 0x8, addend: 0x0, symName: _cache_lookup, symObjAddr: 0x25E8, symBinAddr: 0x100006658, symSize: 0xE0 }
+  - { offsetInCU: 0x940, offset: 0x940, size: 0x8, addend: 0x0, symName: _cache_read, symObjAddr: 0x26C8, symBinAddr: 0x100006738, symSize: 0x4C }
+  - { offsetInCU: 0x997, offset: 0x997, size: 0x8, addend: 0x0, symName: _cache_write, symObjAddr: 0x2714, symBinAddr: 0x100006784, symSize: 0x54 }
+  - { offsetInCU: 0x9F9, offset: 0x9F9, size: 0x8, addend: 0x0, symName: _cache_index, symObjAddr: 0x2768, symBinAddr: 0x1000067D8, symSize: 0x1C }
+  - { offsetInCU: 0xA23, offset: 0xA23, size: 0x8, addend: 0x0, symName: _perform_alu, symObjAddr: 0x2784, symBinAddr: 0x1000067F4, symSize: 0x134 }
+  - { offsetInCU: 0xA7A, offset: 0xA7A, size: 0x8, addend: 0x0, symName: _source_regs, symObjAddr: 0x28F8, symBinAddr: 0x100006968, symSize: 0x1B0 }
+  - { offsetInCU: 0xABA, offset: 0xABA, size: 0x8, addend: 0x0, symName: _perform_compare, symObjAddr: 0x2AF0, symBinAddr: 0x100006B60, symSize: 0x104 }
+  - { offsetInCU: 0xB02, offset: 0xB02, size: 0x8, addend: 0x0, symName: _start_bus_transaction, symObjAddr: 0x2C0C, symBinAddr: 0x100006C7C, symSize: 0x294 }
+  - { offsetInCU: 0xBD8, offset: 0xBD8, size: 0x8, addend: 0x0, symName: _write_bus_trace, symObjAddr: 0x2EA0, symBinAddr: 0x100006F10, symSize: 0xCC }
+  - { offsetInCU: 0xC1C, offset: 0xC1C, size: 0x8, addend: 0x0, symName: _complete_transaction, symObjAddr: 0x2F6C, symBinAddr: 0x100006FDC, symSize: 0x1BC }
+  - { offsetInCU: 0xCE5, offset: 0xCE5, size: 0x8, addend: 0x0, symName: _writeback_line, symObjAddr: 0x3128, symBinAddr: 0x100007198, symSize: 0xC8 }
+  - { offsetInCU: 0xD72, offset: 0xD72, size: 0x8, addend: 0x0, symName: _write_trimmed_mem, symObjAddr: 0x31F0, symBinAddr: 0x100007260, symSize: 0x140 }
+  - { offsetInCU: 0xDF1, offset: 0xDF1, size: 0x8, addend: 0x0, symName: _write_regout, symObjAddr: 0x3330, symBinAddr: 0x1000073A0, symSize: 0xD8 }
+  - { offsetInCU: 0xE52, offset: 0xE52, size: 0x8, addend: 0x0, symName: _write_full_mem, symObjAddr: 0x3408, symBinAddr: 0x100007478, symSize: 0xDC }
+  - { offsetInCU: 0xEC2, offset: 0xEC2, size: 0x8, addend: 0x0, symName: _write_stats, symObjAddr: 0x34E4, symBinAddr: 0x100007554, symSize: 0x19C }
+  - { offsetInCU: 0xF06, offset: 0xF06, size: 0x8, addend: 0x0, symName: _sign_extend, symObjAddr: 0x3680, symBinAddr: 0x1000076F0, symSize: 0x70 }
+  - { offsetInCU: 0xF4A, offset: 0xF4A, size: 0x8, addend: 0x0, symName: _cache_tag, symObjAddr: 0x36F0, symBinAddr: 0x100007760, symSize: 0x1C }
+  - { offsetInCU: 0xF74, offset: 0xF74, size: 0x8, addend: 0x0, symName: _apply_snoop, symObjAddr: 0x370C, symBinAddr: 0x10000777C, symSize: 0x210 }
+  - { offsetInCU: 0x104D, offset: 0x104D, size: 0x8, addend: 0x0, symName: _fill_cache_line, symObjAddr: 0x391C, symBinAddr: 0x10000798C, symSize: 0xBC }
+  - { offsetInCU: 0x10DB, offset: 0x10DB, size: 0x8, addend: 0x0, symName: _line_base_addr, symObjAddr: 0x39D8, symBinAddr: 0x100007A48, symSize: 0x28 }
+...

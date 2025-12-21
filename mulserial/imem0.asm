@@ -38,4 +38,6 @@ loop_k:
 	add $r2,  $r2, $imm, 1			# i++
 	blt $r8,  $r2, $r12			# while i < 16
 	add $zero,  $zero, $zero, 0			# delay slot nop
+	add $r6,  $zero, $imm, 0x4F8		# evict last C block (0x2F8-0x2FF) to force writeback
+	lw  $zero, $zero, $r6, 0			# conflict-miss eviction
 	halt $zero, $zero, $zero, 0
