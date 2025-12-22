@@ -38,6 +38,16 @@ loop_k:
 	add $r2,  $r2, $imm, 1			# i++
 	blt $r8,  $r2, $r12			# while i < 16
 	add $zero,  $zero, $zero, 0			# delay slot nop
-	add $r6,  $zero, $imm, 0x4F8		# evict last C block (0x2F8-0x2FF) to force writeback
+	# Force writeback of the second C block of every row (cols 8-15).
+	# These blocks may remain dirty in the cache at HALT, so without eviction memout.txt
+	# can show zeros (stale main memory) for C[*][15] even when the computed value is non-zero.
+	add $r6,  $zero, $imm, 0x408		# eviction address for row0 second-block (0x208 + 0x200)
+	add $r7,  $zero, $imm, 16		# rows to evict
+	add $r8,  $zero, $imm, evict_rows
+evict_rows:
 	lw  $zero, $zero, $r6, 0			# conflict-miss eviction
+	add $r6,  $r6, $imm, 16			# next row
+	add $r7,  $r7, $imm, -1
+	bgt $r8,  $r7, $zero, 0			# while rows > 0
+	add $zero,  $zero, $zero, 0			# delay slot nop
 	halt $zero, $zero, $zero, 0

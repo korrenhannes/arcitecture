@@ -38,6 +38,14 @@ loop_k:
 	add $r2,  $r2, $imm, 1			# i++
 	blt $r8,  $r2, $r15			# while i < end
 	add $zero,  $zero, $zero, 0			# delay slot nop
-	add $r6,  $zero, $imm, 0x4F8		# evict last C block (0x2F8-0x2FF) to force writeback
+	# Force writeback of this core's C second-blocks (cols 8-15) so memout.txt reflects the full result.
+	add $r6,  $zero, $imm, 0x4C8		# start eviction addr for row12 second-block (0x2C8 + 0x200)
+	add $r7,  $zero, $imm, 4		# rows to evict (12-15)
+	add $r8,  $zero, $imm, evict_rows
+evict_rows:
 	lw  $zero, $zero, $r6, 0			# conflict-miss eviction
+	add $r6,  $r6, $imm, 16			# next row
+	add $r7,  $r7, $imm, -1
+	bgt $r8,  $r7, $zero, 0			# while rows > 0
+	add $zero,  $zero, $zero, 0			# delay slot nop
 	halt $zero, $zero, $zero, 0
